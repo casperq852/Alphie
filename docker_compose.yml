@@ -1,0 +1,19 @@
+version: "3.9"
+services:
+  alphie:
+    build: .
+    container_name: alphie
+    ports:
+      - "8588:8588"
+    environment:
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - TAVILY_API_KEY=${TAVILY_API_KEY}
+      - DATA_DIR=/app/data            # ← app looks here
+      # (optional) Qdrant
+      - USE_QDRANT=${USE_QDRANT:-}
+      - QDRANT_URL=${QDRANT_URL:-http://qdrant:6333}
+      - QDRANT_API_KEY=${QDRANT_API_KEY:-}
+      - QDRANT_COLLECTION=${QDRANT_COLLECTION:-research_chunks}
+    volumes:
+      - ${HOST_DATA_DIR}:/app/data    # ← user picks host path at spin-up
+    restart: unless-stopped

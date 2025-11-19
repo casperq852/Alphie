@@ -1,0 +1,58 @@
+1) Begrippen & Technologie (uitleg)
+AWS (Amazon Web Services): De clouddivisie van Amazon, die bedrijven wereldwijd voorziet van rekenkracht, opslag, databases en steeds meer AI-diensten. AWS is de grootste winstbijdrager binnen Amazon.
+Hyperscaler: Grote cloudproviders zoals Amazon, Microsoft en Google, die op enorme schaal datacenters en cloudinfrastructuur aanbieden.
+LLM (Large Language Model): Een type AI-model dat getraind is op grote hoeveelheden tekstdata en in staat is om menselijke taal te begrijpen en te genereren (zoals ChatGPT of Claude).
+Claude: Een geavanceerd LLM ontwikkeld door Anthropic, een AI-bedrijf waarin Amazon een strategisch belang heeft en dat nauw samenwerkt met AWS.
+Bedrock: Het AI-platform van AWS waarmee klanten toegang krijgen tot verschillende generatieve AI-modellen (waaronder Claude), API’s en tools voor het bouwen van AI-toepassingen.
+Trainium & Inferentia: Door Amazon zelf ontwikkelde chips, specifiek ontworpen om AI-modellen efficiënt te trainen (Trainium) en uit te voeren/infereren (Inferentia), als alternatief voor Nvidia GPU’s.
+GPU-capaciteit: De hoeveelheid grafische rekenkracht die nodig is voor het trainen en draaien van AI-modellen. GPU’s zijn schaars en essentieel voor AI-ontwikkeling.
+Vector database (vector db): Een database die speciaal is ontworpen voor het opslaan en snel doorzoeken van vectorrepresentaties van data, cruciaal voor AI-toepassingen zoals zoekmachines en aanbevelingssystemen.
+Fine-tuning: Het proces waarbij een bestaand AI-model verder wordt getraind op specifieke data van een klant, zodat het model beter aansluit bij hun unieke behoeften.
+Inference cost per token: De kosten die gemaakt worden om een AI-model een enkele eenheid tekst (“token”) te laten genereren of verwerken. Dit is een belangrijke kostenpost bij grootschalige AI-toepassingen.
+Project Rainier: De nieuwste generatie supercomputing-infrastructuur van AWS, uitgerust met Trainium2-chips, bedoeld voor het trainen van de grootste AI-modellen.
+Anthropic: Een toonaangevende AI-startup, bekend van het Claude-model, waarin Amazon een miljardeninvestering heeft gedaan en die haar volgende generatie modellen exclusief op AWS traint.
+2) Kernantwoord op de vraag
+Amazon positioneert zich in AI primair als infrastructuurleverancier via AWS, met een sterke focus op het bedienen van enterprise-klanten en AI-bedrijven zoals Anthropic. Hoewel Amazon niet de eerste was met een “killer app” zoals ChatGPT (Microsoft/OpenAI) of een volledig geïntegreerde AI-stack (Google), investeert het bedrijf fors in eigen AI-chips (Trainium, Inferentia), datacenteruitbreiding en strategische samenwerkingen. De strategie is om een breed, flexibel AI-platform (Bedrock) te bieden, waarmee klanten toegang krijgen tot meerdere modellen en tools, in plaats van in te zetten op één dominant model.
+
+De AI-omzet van AWS komt nu vooral uit pilots en vroege enterprise-projecten, maar Amazon verwacht dat dit de komende jaren sterk zal versnellen naarmate bedrijven AI breder gaan toepassen in hun kernprocessen. De samenwerking met Anthropic (Claude) wordt gezien als een belangrijke groeimotor vanaf 2026, wanneer hun nieuwe modellen exclusief op AWS draaien en de vraag naar AI-capaciteit verder toeneemt [S11/S8].
+
+3) Businessmodel & Strategische Positionering
+Amazon verdient aan AI op drie niveaus:
+
+Cloudinfrastructuur (AWS): Klanten betalen voor rekenkracht, opslag en gespecialiseerde AI-hardware (GPU’s, Trainium, Inferentia). Dit is een schaalbaar, margerijk model.
+AI-platformdiensten (Bedrock, SageMaker): Amazon biedt API’s en tools waarmee bedrijven snel AI-toepassingen kunnen bouwen, zonder zelf modellen te hoeven trainen of beheren.
+Data & Integratie: Door diepe integratie van AI in bestaande AWS-diensten en koppelingen met enterprise-software, wordt het voor klanten aantrekkelijker om hun AI-workloads bij AWS te houden (“data gravity”).
+De marges zijn het hoogst bij platformdiensten en eigen chips, omdat Amazon hier minder afhankelijk is van dure Nvidia-GPU’s en meer controle heeft over de kostenstructuur. De keuze voor een “open” AI-platform (meerdere modellen, geen lock-in) is bedoeld om zo veel mogelijk enterprise-klanten aan te trekken en te behouden, ook als de markt voor AI-modellen verder consolideert [S5/S14].
+
+4) Competitieve Dynamiek & Moat
+Amazon is niet de snelste AI-innovator, maar heeft een enorme bestaande enterprise-klantenbasis, diepe integratie met bedrijfsprocessen en een bewezen trackrecord in cloudinfrastructuur. De concurrentie (Microsoft/Azure, Google Cloud) heeft sneller geprofiteerd van de eerste AI-golf door exclusieve deals (OpenAI bij Microsoft) en eigen modellen (Gemini bij Google). Hierdoor lijkt AWS qua AI-omzetgroei tijdelijk achter te lopen (“Is AWS in last place in AI? It’s hard to argue otherwise” [S6]).
+
+Toch biedt Amazon’s schaal, flexibiliteit en investeringskracht een sterke moat:
+
+Switching costs: Voor grote bedrijven is overstappen van AWS naar een andere cloudprovider complex en kostbaar.
+Eigen chips: Met Trainium en Inferentia kan Amazon de kosten per AI-inferentie verlagen en zich minder afhankelijk maken van Nvidia.
+Ecosysteem: Door partnerships (Anthropic) en een breed aanbod aan AI-modellen blijft AWS aantrekkelijk voor zowel startups als gevestigde bedrijven.
+Capaciteit: Amazon investeert fors in datacenters en duurzame energie om toekomstige AI-vraag aan te kunnen, wat een bottleneck is voor de hele sector [S19].
+5) Kritieke KPI’s (verschil tussen nu en toekomst)
+De belangrijkste KPI’s die de AI-transitie van Amazon drijven zijn:
+
+AI-omzet als % van AWS-omzet: Dit aandeel ligt nu lager dan bij Microsoft/Azure, maar wordt vanaf 2026/2027 substantieel hoger verwacht door Anthropic en bredere enterprise-adoptie [S5/S11].
+Capaciteitsgroei (datacenters, GPU’s, eigen chips): De bottleneck van 2024/2025 (te weinig AI-capaciteit) wordt naar verwachting opgelost door de nieuwe investeringsgolf (“capacity has started coming online in Q3, and so AWS should follow a similar acceleration to Azure” [S2]).
+Adoptie Bedrock en eigen chips: Succesvolle uitrol van Bedrock en Trainium2 bepaalt of AWS de kosten per token kan verlagen en aantrekkelijk blijft voor AI-klanten.
+Enterprise AI-adoptie: De echte versnelling komt pas als bedrijven AI grootschalig in productie nemen (“enterprise spending is still yet to truly start ramping” [S19]).
+6) Catalysts & Tijdspad
+2025: Nieuwe datacentercapaciteit en Trainium2-clusters komen online, waardoor AWS meer AI-workloads kan bedienen.
+2026-2027: Anthropic’s volgende generatie modellen draait exclusief op AWS, wat naar verwachting 3-7 procentpunt extra groei oplevert voor AWS [S11].
+Enterprise AI-adoptie: Naarmate bedrijven AI breder inzetten, verschuift een groter deel van hun IT-budget naar AI-cloud, wat AWS direct ten goede komt.
+AWS Re:Invent (jaarlijkse conferentie): Verwacht wordt dat Amazon hier nieuwe AI-diensten en samenwerkingen aankondigt, wat als katalysator kan werken voor het sentiment en de groei [S6].
+7) Risico’s & Mitigatie (realistisch)
+Capaciteitsproblemen: AWS was in 2024/2025 tijdelijk beperkt in AI-capaciteit, waardoor klanten (zoals Anthropic) deels uitweken naar Google. Amazon lost dit op door massaal te investeren in nieuwe datacenters en eigen chips [S28].
+Concurrentie: Microsoft en Google hebben een voorsprong in AI-apps en exclusieve deals. Amazon’s strategie is om via openheid en schaal alsnog een groot deel van de markt te winnen.
+Adoptietempo enterprise AI: Als bedrijven trager AI adopteren dan verwacht, kan de AI-omzetgroei tegenvallen. Amazon beperkt dit risico door breed in te zetten op zowel startups als grote ondernemingen.
+Technologische lock-in: Als eigen chips (Trainium, Inferentia) niet breed geadopteerd worden, blijft AWS afhankelijk van Nvidia en kan het margedruk ervaren. Amazon blijft daarom ook Nvidia-GPU’s inkopen en biedt meerdere opties aan klanten [S11].
+8) Mini-thesis (Bull / Bear / Base)
+Bull case: Amazon weet met eigen chips en het Bedrock-platform de kosten per AI-inferentie structureel te verlagen, trekt grote enterprise AI-workloads aan en groeit vanaf 2026 weer sneller dan de markt, met sterke margeverbetering door schaal en integratie (“We see upside to AWS numbers and narrative around Re:Invent” [S6]).
+
+Bear case: AWS blijft achter in de AI-race door trage adoptie van eigen chips, aanhoudende capaciteitsproblemen en een te gefragmenteerd AI-aanbod, waardoor marktaandeel en marges structureel onder druk komen (“Is AWS in last place in AI? It’s hard to argue otherwise” [S6]).
+
+Base case: Amazon blijft de dominante enterprise-cloudspeler, pakt zijn “fair share” van de AI-groeigolf dankzij investeringen in infrastructuur en partnerships, maar groeit iets langzamer dan Microsoft/Google in AI, met stabiele marges en solide omzetgroei (“AWS has the highest market share (over 45%) in cloud infrastructure-as-a-service, which lends confidence that it can capture a fair share of AI-related sales” [S31]).
