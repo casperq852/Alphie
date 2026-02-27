@@ -9,6 +9,9 @@ services:
       - OPENAI_API_KEY=${OPENAI_API_KEY}
       - TAVILY_API_KEY=${TAVILY_API_KEY}
       - DATA_DIR=/app/data            # ← app looks here
+      - INGEST_MODEL=${INGEST_MODEL:-gpt-4o-mini}
+      - INGEST_MAX_CHUNKS=${INGEST_MAX_CHUNKS:-160}
+      - EMBED_BATCH_SIZE=${EMBED_BATCH_SIZE:-64}
       # (optional) Qdrant
       - USE_QDRANT=${USE_QDRANT:-}
       - QDRANT_URL=${QDRANT_URL:-http://qdrant:6333}

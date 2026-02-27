@@ -22,6 +22,10 @@ MINI_MODEL   = os.getenv("INGEST_MODEL", os.getenv("MINI_MODEL", "gpt-4o-mini"))
 EMB_MODEL    = "text-embedding-3-large"
 client = OpenAI()
 
+# Ingestion performance/safety knobs
+INGEST_MAX_CHUNKS = int(os.getenv("INGEST_MAX_CHUNKS", "160"))
+EMBED_BATCH_SIZE = int(os.getenv("EMBED_BATCH_SIZE", "64"))
+
 USE_QDRANT = bool(os.getenv("USE_QDRANT", "").strip()) or bool(os.getenv("QDRANT_URL", "").strip())
 if USE_QDRANT:
     from qdrant_backend import upsert_chunks as qdrant_upsert, search as qdrant_search
@@ -200,6 +204,16 @@ def embed_texts(texts: List[str]):
     faiss.normalize_L2(vecs)
     return vecs
 
+
+def embed_texts_batched(texts: List[str], batch_size: int = EMBED_BATCH_SIZE):
+    if not texts:
+        return np.zeros((0, 3072), dtype="float32")
+    all_vecs = []
+    for i in range(0, len(texts), max(1, batch_size)):
+        batch = texts[i:i + max(1, batch_size)]
+        all_vecs.append(embed_texts(batch))
+    return np.vstack(all_vecs)
+
 def chunk_text(text: str, target_tokens: int = 500, overlap_tokens: int = 50) -> List[str]:
     enc = tiktoken.get_encoding("cl100k_base")
     ids = enc.encode(text or "")
@@ -268,7 +282,7 @@ def classify_companies(raw_text: str, model: Optional[str] = None) -> List[str]:
         "Return ONLY a JSON array of strings (no code fences). Return all the companies found, also if the name of the company is mentioned differently multiple times. Return each of those seperately as well as tickers if they are found."
     )
     user = f"Text:\n{raw_text[:8000]}"
-    use_model = "gpt-4o-mini"
+    use_model = model or MINI_MODEL
     resp = client.chat.completions.create(
         model=use_model, temperature=0.2,
         messages=[{"role": "system", "content": system},
@@ -324,11 +338,14 @@ def add_documents(paths: List[Path]) -> Dict[str, Any]:
             doc_id = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
 
             chunks = chunk_text(text)
+            total_chunks = len(chunks)
+            if INGEST_MAX_CHUNKS > 0 and len(chunks) > INGEST_MAX_CHUNKS:
+                chunks = chunks[:INGEST_MAX_CHUNKS]
             if not chunks:
                 conn.execute("DELETE FROM documents WHERE id=?", (doc_id,)); conn.commit()
                 details.append({"file": p.name, "status": "error", "error": "no chunks produced"}); continue
 
-            vecs = embed_texts(chunks)
+            vecs = embed_texts_batched(chunks)
 
             if USE_QDRANT:
                 qdrant_upsert(
@@ -364,6 +381,8 @@ def add_documents(paths: List[Path]) -> Dict[str, Any]:
             details.append({
                 "file": p.name, "status": "added", "hash": h,
                 "companies": companies, "pages": n_pages, "chunks": len(chunks),
+                "chunks_total": total_chunks,
+                "truncated_for_ingest": total_chunks > len(chunks),
                 "stored_path": str(stored_path), "doc_date": doc_date
             })
             added += 1
