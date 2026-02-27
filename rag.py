@@ -17,7 +17,8 @@ from db import get_conn, DATA_DIR
 
 # -------- Models --------
 OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-5-mini")  # default answering model
-MINI_MODEL   = os.getenv("MINI_MODEL", "gpt-4o-mini")    # forced for ingestion steps
+# Faster/cheaper model for ingestion-time classification (override via INGEST_MODEL)
+MINI_MODEL   = os.getenv("INGEST_MODEL", os.getenv("MINI_MODEL", "gpt-4o-mini"))
 EMB_MODEL    = "text-embedding-3-large"
 client = OpenAI()
 

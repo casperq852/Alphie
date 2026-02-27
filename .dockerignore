@@ -1,0 +1,18 @@
+# VCS / local env
+.git
+.gitignore
+.env
+
+# Runtime / generated data
+data/
+tmp_upload/
+*.db
+*.sqlite
+*.sqlite3
+__pycache__/
+*.pyc
+
+# OS/editor noise
+.DS_Store
+.vscode/
+.idea/

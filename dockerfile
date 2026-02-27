@@ -36,7 +36,7 @@ EXPOSE 8501
 
 # Basic healthcheck for Streamlit
 HEALTHCHECK --interval=30s --timeout=5s --retries=3 \
-  CMD curl -fsS http://localhost:8588/_stcore/health || exit 1
+  CMD curl -fsS http://localhost:8501/_stcore/health || exit 1
 
 ENV STREAMLIT_SERVER_HEADLESS=true
 ENV STREAMLIT_BROWSER_GATHERUSAGESTATS=false

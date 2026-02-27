@@ -4,7 +4,7 @@ services:
     build: .
     container_name: alphie
     ports:
-      - "8588:8588"
+      - "8588:8501"
     environment:
       - OPENAI_API_KEY=${OPENAI_API_KEY}
       - TAVILY_API_KEY=${TAVILY_API_KEY}

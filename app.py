@@ -56,6 +56,16 @@ def _pdf_data_link(path: str, download_name: str) -> str:
     b64 = base64.b64encode(b).decode("utf-8")
     return f'data:application/pdf;base64,{b64}', download_name
 
+
+def _safe_text(s: str) -> str:
+    return html.escape(str(s or ""), quote=True)
+
+def _safe_url(url: str) -> str:
+    u = (url or "").strip()
+    if u.startswith("http://") or u.startswith("https://"):
+        return html.escape(u, quote=True)
+    return ""
+
 def _render_pdf_sources(legend: list[tuple[str, str, str]]) -> str:
     by_path = {}
     for tag, path, name in legend:
@@ -70,23 +80,25 @@ def _render_pdf_sources(legend: list[tuple[str, str, str]]) -> str:
         name = info["name"]; path = info["path"]
         if path and Path(path).exists():
             href, dl_name = _pdf_data_link(path, name)
-            links.append(f'<a href="{href}" download="{dl_name}">[{tags_txt}] {_short(name)}</a>')
+            links.append(f'<a href="{href}" download="{_safe_text(dl_name)}">[{_safe_text(tags_txt)}] {_safe_text(_short(name))}</a>')
         else:
             links.append(
-                f'<span title="File not available">[{tags_txt}] {_short(name)}</span>'
+                f'<span title="File not available">[{_safe_text(tags_txt)}] {_safe_text(_short(name))}</span>'
             )
     return " · ".join(links)
 
 def _render_web_sources(legend: list[tuple[str, str, str]]) -> str:
     links = []
     for tag, title, url in legend:
-        safe_title = (title or url or "link")[:80]
-        if url:
+        safe_title = _safe_text((title or url or "link")[:80])
+        safe_tag = _safe_text(tag)
+        safe_href = _safe_url(url)
+        if safe_href:
             links.append(
-                f'<a href="{url}" target="_blank" rel="noopener">[{tag}] {safe_title}</a>'
+                f'<a href="{safe_href}" target="_blank" rel="noopener">[{safe_tag}] {safe_title}</a>'
             )
         else:
-            links.append(f'<span>[{tag}] {safe_title}</span>')
+            links.append(f'<span>[{safe_tag}] {safe_title}</span>')
     return " · ".join(links)
 
 # -------------------------------------------------
@@ -121,6 +133,7 @@ st.sidebar.write(f"**Laatste upload:** {lastUpload or 'n.v.t.'}")
 
 st.sidebar.markdown("---")
 st.sidebar.write("OPENAI_MODEL:", os.getenv("OPENAI_MODEL", "gpt-4o-mini"))
+st.sidebar.write("INGEST_MODEL:", os.getenv("INGEST_MODEL", os.getenv("MINI_MODEL", "gpt-4o-mini")))
 
 
 # -------------------------------------------------
