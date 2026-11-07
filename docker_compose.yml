@@ -12,7 +12,7 @@ services:
       - INGEST_MODEL=${INGEST_MODEL:-gpt-4o-mini}
       - INGEST_MAX_CHUNKS=${INGEST_MAX_CHUNKS:-160}
       - EMBED_BATCH_SIZE=${EMBED_BATCH_SIZE:-64}
-      # (optional) Qdrant
+      # Qdrant: ON by default here because QDRANT_URL has a default. Set USE_QDRANT=false for local FAISS.
       - USE_QDRANT=${USE_QDRANT:-}
       - QDRANT_URL=${QDRANT_URL:-http://qdrant:6333}
       - QDRANT_API_KEY=${QDRANT_API_KEY:-}

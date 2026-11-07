@@ -1,12 +1,13 @@
 # db.py
 import os
-import sqlite3
 import shutil
+import sqlite3
+import threading
 from pathlib import Path
 
 # ---- Original behavior baseline ----
 BASE_DIR = Path(__file__).resolve().parent
-DEFAULT_DATA_DIR = (BASE_DIR / "data")  # original default
+DEFAULT_DATA_DIR = BASE_DIR / "data"  # original default
 DEFAULT_DATA_DIR.mkdir(parents=True, exist_ok=True)
 
 # ---- New: allow override via env for Unraid bind mounts ----
@@ -116,9 +117,28 @@ def _ensure_columns(conn: sqlite3.Connection):
         pass
 
 
-def get_conn():
-    conn = sqlite3.connect(str(DB_PATH))
+_SCHEMA_READY = False
+_SCHEMA_LOCK = threading.Lock()
 
+
+def get_conn() -> sqlite3.Connection:
+    """New connection; the schema/migrations run only once per process."""
+    global _SCHEMA_READY
+    conn = sqlite3.connect(str(DB_PATH), timeout=30)
+    conn.execute("PRAGMA foreign_keys=ON")
+    if not _SCHEMA_READY:
+        with _SCHEMA_LOCK:
+            if not _SCHEMA_READY:
+                _init_schema(conn)
+                _SCHEMA_READY = True
+    return conn
+
+
+def _init_schema(conn: sqlite3.Connection) -> None:
+    try:
+        conn.execute("PRAGMA journal_mode=WAL")  # readers don't block the writer during ingestion
+    except Exception:
+        pass
     # Core RAG tables (existing)
     conn.execute("""
     CREATE TABLE IF NOT EXISTS documents (
@@ -148,7 +168,7 @@ def get_conn():
 
     # New tables / migrations
     _ensure_columns(conn)
-    return conn
+    conn.commit()
 
 
 def list_documents():
@@ -164,7 +184,21 @@ def list_documents():
     ).fetchall()
     conn.close()
     cols = ["id", "filename", "hash", "companies", "n_pages", "n_chunks", "added_at", "stored_path", "doc_date"]
-    return [dict(zip(cols, r)) for r in rows]
+    return [dict(zip(cols, r, strict=True)) for r in rows]
+
+
+def list_models():
+    conn = get_conn()
+    rows = conn.execute(
+        """
+        SELECT m.id, m.filename, m.companies,
+               (SELECT COUNT(*) FROM metrics x WHERE x.model_id = m.id) AS n_metrics, m.added_at
+        FROM models m ORDER BY m.added_at DESC
+        """
+    ).fetchall()
+    conn.close()
+    return [dict(zip(["id", "filename", "companies", "n_metrics", "added_at"], r, strict=True)) for r in rows]
+
 
 # Expose for other modules
-__all__ = ["DATA_DIR", "DB_PATH", "get_conn", "list_documents"]
+__all__ = ["DATA_DIR", "DB_PATH", "get_conn", "list_documents", "list_models"]

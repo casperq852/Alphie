@@ -1,0 +1,14 @@
+[tool.ruff]
+line-length = 122
+target-version = "py311"
+extend-exclude = ["data"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B", "PLC0415"]
+ignore = ["B008"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["agent_policy", "company_normalizer", "custom_query", "db", "llm", "qdrant_backend", "rag", "scoring", "websearch"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
