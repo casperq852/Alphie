@@ -1,166 +1,128 @@
+"""Optional web augmentation via Tavily (https://docs.tavily.com). Disabled when TAVILY_API_KEY is unset."""
+
 import os
-import requests
-from typing import List, Dict, Tuple
-
-TAVILY_API_KEY = os.getenv("TAVILY_API_KEY", "")
-
 import re
 from datetime import datetime
 
-def _norm_name(s: str) -> str:
-    s = (s or "").lower()
-    s = re.sub(r"\b(group|plc|inc|nv|sa|ltd|corp|co|ag|se|nv)\b", " ", s)
-    s = re.sub(r"[^a-z0-9\s]", " ", s)
-    s = re.sub(r"\s+", " ", s).strip()
-    return s
+import requests
 
-def _looks_recent_snippet(text: str, max_age_days: int = 120) -> float:
-    """Heuristic: reward current-year/month mentions; penalize likely old snippets."""
+from scoring import norm_name
+
+TAVILY_API_KEY = os.getenv("TAVILY_API_KEY", "")
+TAVILY_URL = "https://api.tavily.com/search"
+_MAX_QUERY_CHARS = 380  # long prompts make poor search queries; Tavily works best with short queries
+
+
+def _looks_recent_snippet(text: str) -> float:
+    """Heuristic: reward current-year mentions; penalise snippets that only mention older years."""
     now = datetime.now()
     score = 1.0
-    # Bonus if current year appears
     if str(now.year) in (text or ""):
         score *= 1.2
-    # Mild penalty if only older years appear
-    older_hits = re.findall(r"\b(20\d{2})\b", text or "")
-    if older_hits and all(int(y) <= now.year - 1 for y in older_hits):
+    years = [int(y) for y in re.findall(r"\b(20\d{2})\b", text or "")]
+    if years and all(y <= now.year - 1 for y in years):
         score *= 0.8
     return score
 
+
 def _company_match_ok(snippet: dict, companies: list[str]) -> bool:
-    if not companies: 
+    """Snippet must mention every token of at least one (normalised) company name."""
+    if not companies:
         return True
-    title = (snippet.get("title") or "")
-    content = (snippet.get("content") or "")
-    blob = f"{title}\n{content}".lower()
-    # must contain at least one normalized company token
+    blob = f"{snippet.get('title') or ''}\n{snippet.get('content') or ''}".lower()
     for c in companies:
-        n = _norm_name(c)
-        if not n: 
-            continue
-        # require all tokens of the normalized name to appear
-        tokens = [t for t in n.split() if len(t) > 1]
-        if tokens and all(t in blob for t in tokens):
+        tokens = [t for t in norm_name(c).split() if len(t) > 1]
+        if tokens and all(re.search(rf"\b{re.escape(t)}\b", blob) for t in tokens):
             return True
     return False
 
-def _post_json(url: str, payload: dict, timeout: int = 25) -> Tuple[dict, str]:
-    """POST JSON and return (json_or_empty, error_msg_or_empty)."""
-    try:
-        r = requests.post(url, json=payload, timeout=timeout)
-        r.raise_for_status()
-        return r.json(), ""
-    except Exception as e:
-        return {}, f"{type(e).__name__}: {e}"
 
-def tavily_search(query: str, max_results: int = 5) -> Tuple[List[Dict], str]:
-    """
-    Primary search on /search; returns (results, error_message_if_any).
-    Results schema: [{title, url, content}]
-    """
+def _time_range(days: int | None) -> str | None:
+    if not days:
+        return None
+    if days <= 1:
+        return "day"
+    if days <= 7:
+        return "week"
+    if days <= 31:
+        return "month"
+    return "year"
+
+
+def tavily_search(
+    query: str, max_results: int = 5, topic: str = "general", days: int | None = None
+) -> tuple[list[dict], str]:
+    """POST /search; returns (results, error_message). Results: [{title, url, content, published_date}]."""
     if not TAVILY_API_KEY:
         return [], "No TAVILY_API_KEY set"
-
-    base_payload = {
-        "api_key": TAVILY_API_KEY,
-        "query": query,
-        "max_results": max_results,
-        "include_answer": False,
+    payload: dict = {
+        "query": query[:_MAX_QUERY_CHARS],
+        "max_results": max(1, min(20, max_results)),
         "search_depth": "advanced",
-        "include_domains": [],
-        "exclude_domains": [],
+        "topic": topic,
+        "include_answer": False,
     }
+    tr = _time_range(days)
+    if tr:
+        payload["time_range"] = tr
     try:
-        r = requests.post("https://api.tavily.com/search", json=base_payload, timeout=25)
+        r = requests.post(TAVILY_URL, json=payload, headers={"Authorization": f"Bearer {TAVILY_API_KEY}"}, timeout=25)
         r.raise_for_status()
         data = r.json()
     except Exception as e:
         return [], f"{type(e).__name__}: {e}"
-    results = []
-    for r in data.get("results", [])[:max_results]:
-        results.append({
-            "title": (r.get("title") or "").strip(),
-            "url": (r.get("url") or "").strip(),
-            "content": (r.get("content") or "")[:1200]
-        })
-    return results, ""
+    return [
+        {
+            "title": (x.get("title") or "").strip(),
+            "url": (x.get("url") or "").strip(),
+            "content": (x.get("content") or "")[:1200],
+            "published_date": x.get("published_date") or "",
+        }
+        for x in data.get("results", [])[:max_results]
+    ], ""
 
-def tavily_news(query: str, max_results: int = 5, time_range: str = "week") -> Tuple[List[Dict], str]:
-    """
-    Fallback to /news; returns (results, error_message_if_any).
-    """
-    if not TAVILY_API_KEY:
-        return [], "No TAVILY_API_KEY set"
 
-    payload = {
-        "api_key": TAVILY_API_KEY,
-        "query": query,
-        "max_results": max_results,
-        "time_range": time_range,  # day|week|month
-    }
-    try:
-        r = requests.post("https://api.tavily.com/news", json=payload, timeout=25)
-        r.raise_for_status()
-        data = r.json()
-    except Exception as e:
-        return [], f"{type(e).__name__}: {e}"
-    results = []
-    for r in data.get("results", [])[:max_results]:
-        results.append({
-            "title": (r.get("title") or "").strip(),
-            "url": (r.get("url") or "").strip(),
-            "content": (r.get("content") or "")[:1200]
-        })
-    return results, ""
-
-def web_augmented_snippets(user_question: str, companies: List[str], per_company: int = 2, max_total: int = 6) -> Tuple[List[Dict], List[str]]:
+def web_augmented_snippets(
+    user_question: str,
+    companies: list[str],
+    per_company: int = 3,
+    max_total: int = 6,
+    days: int | None = None,
+) -> tuple[list[dict], list[str]]:
+    """Company-targeted web snippets. `days` restricts to recent news (used by the events tab)."""
     if not TAVILY_API_KEY:
         return [], ["No TAVILY_API_KEY set"]
 
-    snippets, debug = [], []
-    queries_ran = 0
+    snippets: list[dict] = []
+    debug: list[str] = []
+    seen_urls: set[str] = set()
+    topic = "news" if days else "general"
 
-    def _keep(hits):
+    def _keep(hits: list[dict]) -> list[dict]:
         out = []
         for h in hits:
-            if not _company_match_ok(h, companies):
+            if h["url"] in seen_urls or not _company_match_ok(h, companies):
                 continue
-            h["_score"] = _looks_recent_snippet(h.get("content",""))
+            seen_urls.add(h["url"])
+            h["_score"] = _looks_recent_snippet(f"{h.get('content', '')} {h.get('published_date', '')}")
             out.append(h)
-        # order by our recency score then keep original order
-        out.sort(key=lambda x: x.get("_score", 1.0), reverse=True)
-        return out
+        return sorted(out, key=lambda x: x["_score"], reverse=True)
 
-    # Broad (only if we truly have no companies)
+    def _run(q: str, n: int, label: str) -> list[dict]:
+        hits, err = tavily_search(q, max_results=n, topic=topic, days=days)
+        if err:
+            debug.append(f"search error ({label}): {err}")
+        if not hits and topic == "general":  # fall back to the news index
+            hits, err = tavily_search(q, max_results=n, topic="news", days=days or 30)
+            if err:
+                debug.append(f"news error ({label}): {err}")
+        return hits
+
     if not companies:
-        queries_ran += 1
-        q = f"{user_question}. Prefer earnings, guidance, regulatory actions, M&A, or broker calls."
-        hits, err1 = tavily_search(q, max_results=max_total)
-        if err1: debug.append(f"/search error (broad): {err1}")
-        if not hits:
-            news_hits, err2 = tavily_news(q, max_results=max_total, time_range="month")
-            if err2: debug.append(f"/news error (broad): {err2}")
-            hits = news_hits
-        snippets.extend(_keep(hits))
-
-    # Targeted per company
+        snippets.extend(_keep(_run(user_question, max_total, "broad")))
     for c in companies[:4]:
-        if len(snippets) >= max_total: break
-        q = (f"{c} earnings, guidance, regulatory updates, M&A, broker notes. "
-             f"User focus: {user_question}")
-        queries_ran += 1
-
-        hits, err1 = tavily_search(q, max_results=per_company)
-        if err1: debug.append(f"/search error for '{c}': {err1}")
-        if not hits:
-            news_hits, err2 = tavily_news(q, max_results=per_company, time_range="month")
-            if err2: debug.append(f"/news error for '{c}': {err2}")
-            hits = news_hits
-
-        snippets.extend(_keep(hits))
-
-    if queries_ran == 0:
-        debug.append("No queries ran (empty company list).")
-
-    # final trim
+        if len(snippets) >= max_total:
+            break
+        q = f"{c} earnings guidance M&A regulatory broker rating. {user_question}"
+        snippets.extend(_keep(_run(q, per_company, c)))
     return snippets[:max_total], debug

@@ -1,115 +1,79 @@
-from typing import Dict, Any, List, Tuple, Optional
+"""Agents: event summaries per ticker and the multi-section investment case builder."""
 
-import os
-from openai import OpenAI
+from collections.abc import Callable
+from typing import Any
 
-from rag import search_chunks
+from company_normalizer import canonicalize, classify_companies
+from llm import OPENAI_MODEL, chat
+from rag import collect_evidence, days_ago_iso, refresh_company_index, search_chunks
 from websearch import web_augmented_snippets
-from company_normalizer import canonicalize, load_company_index
-from rag import list_all_companies
 
-# Use same default as the rest of the app if available
-_OPENAI_MODEL_DEFAULT = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
-_events_client = OpenAI()
+Legend = list[tuple[str, str, str]]
 
 
-def _needs_web(
-    user_query: str,
-    local_hits: List[dict],
-    prefer_local: bool,
-    web_allowed: bool,
-) -> tuple[bool, str]:
-    """
-    Decide if we should call web search for normal Q&A mode.
-    Very simple:
-    - if web not allowed           -> False
-    - if no local hits             -> True, "no-local-hits"
-    - if prefer_local and hits     -> True, "blend-local-web"
-    - otherwise                    -> True, "always-blend"
-    """
-    if not web_allowed:
-        return False, "web-disabled"
-    if not local_hits:
-        return True, "no-local-hits"
-    if prefer_local:
-        return True, "blend-local-web"
-    return True, "always-blend"
+def format_pdf_context(hits: list[dict]) -> tuple[list[str], Legend]:
+    """[S#] blocks with source name + date (so the model can weigh recency) and the matching legend."""
+    blocks, legend = [], []
+    for i, h in enumerate(hits, start=1):
+        tag = f"S{i}"
+        title = h.get("source") or "PDF-bron"
+        legend.append((tag, h.get("stored_path") or "", title))
+        d = h.get("doc_date") or h.get("chunk_date") or ""
+        header = f"[{tag}] {title}" + (f" ({d})" if d else "")
+        blocks.append(f"{header}\n{h.get('text') or ''}")
+    return blocks, legend
+
+
+def format_web_context(snips: list[dict]) -> tuple[list[str], Legend]:
+    blocks, legend = [], []
+    for j, r in enumerate(snips, start=1):
+        tag = f"W{j}"
+        legend.append((tag, r.get("title", "web"), r.get("url", "")))
+        d = r.get("published_date") or ""
+        blocks.append(f"[{tag}]" + (f" ({d})" if d else "") + f" {r.get('snippet') or r.get('content') or ''}")
+    return blocks, legend
+
+
+def detect_companies(text: str) -> list[str]:
+    """Companies in a free-text query, aligned to names known in the repository."""
+    refresh_company_index()
+    try:
+        found = classify_companies(text)
+    except Exception:
+        found = []
+    return canonicalize(found or [text.strip()])
+
 
 def summarize_events_for_ticker(
     ticker: str,
     days: int = 14,
     web_allowed: bool = True,
-    model_override: Optional[str] = None,
-) -> Dict[str, Any]:
-    """
-    Samenvatting van key events voor één aandeel over de laatste N dagen.
+    model_override: str | None = None,
+) -> dict[str, Any]:
+    """Samenvatting van key events voor één aandeel over de laatste N dagen.
 
-    - PDF / Qdrant documenten zijn **leidend**.
-    - Web (Tavily) is secundair; alleen gebruiken als het echt iets toevoegt.
-    """
+    - PDF / Qdrant documenten (gepubliceerd binnen de periode) zijn **leidend**.
+    - Web (Tavily nieuws binnen de periode) is secundair; alleen gebruiken als het echt iets toevoegt."""
+    refresh_company_index()
+    ticker = (canonicalize([ticker]) or [ticker])[0]
 
-    load_company_index(list_all_companies())
-    ticker = canonicalize([ticker])[0]
-
-
-    # ---------- 1) PDF / document search (leading) ----------
+    # ---------- 1) PDF / document search (leading), restricted to the period ----------
     base_question = (
         f"Key bedrijfsspecifieke gebeurtenissen voor {ticker} in de laatste {days} dagen: "
         f"earnings, trading updates, guidance, grote koersbewegingen, "
         f"broker rating/target wijzigingen, M&A, strategische aankondigingen en relevante regulatoire nieuws."
     )
-    chunk_query = (
-        base_question
-        + " Focus op ongeveer de laatste periode; als er weinig is gebeurd, is dat ook een geldige uitkomst."
-    )
-
-    # eerst: met company_filter
-    local_hits = search_chunks(
-        query=chunk_query,
-        k=24,
-        company_filter=[ticker],
-    )
-
-    doc_legend: List[Tuple[str, str, str]] = []
-    doc_blocks: List[str] = []
-
-    for i, h in enumerate(local_hits, start=1):
-        tag = f"S{i}"
-        title = h.get("source") or h.get("doc_title") or h.get("title") or "PDF-bron"
-        path = h.get("stored_path") or ""
-        txt = h.get("text") or h.get("chunk_text") or ""
-        chunk_date = h.get("chunk_date") or h.get("doc_date") or ""
-
-        doc_legend.append((tag, path, title))
-
-        header = f"[{tag}] {title}"
-        if chunk_date:
-            header += f" ({chunk_date})"
-        doc_blocks.append(f"{header}\n{txt}")
-
+    local_hits = search_chunks(query=base_question, k=24, company_filter=[ticker], date_from=days_ago_iso(days))
+    doc_blocks, doc_legend = format_pdf_context(local_hits)
     doc_context = "\n\n".join(doc_blocks)
 
     # ---------- 2) Web snippets (secondary / optional) ----------
-    web_snips: List[Dict[str, Any]] = []
-    web_debug: List[str] = []
-    web_legend: List[Tuple[str, str, str]] = []
-    web_context = ""
-
+    web_snips: list[dict] = []
+    web_debug: list[str] = []
     if web_allowed:
-        web_snips, web_debug = web_augmented_snippets(
-            user_question=base_question,
-            companies=[ticker],
-        )
-        if web_snips:
-            parts: List[str] = []
-            for j, r in enumerate(web_snips, start=1):
-                tag = f"W{j}"
-                title = r.get("title", "web")
-                url = r.get("url", "")
-                snippet = r.get("snippet") or r.get("content") or ""
-                web_legend.append((tag, title, url))
-                parts.append(f"[{tag}] {snippet}")
-            web_context = "\n\n".join(parts)
+        web_snips, web_debug = web_augmented_snippets(user_question=base_question, companies=[ticker], days=days)
+    web_blocks, web_legend = format_web_context(web_snips)
+    web_context = "\n\n".join(web_blocks)
 
     # ---------- 3) Geen evidence -> "rustige periode" ----------
     if not doc_context and not web_snips:
@@ -122,25 +86,22 @@ def summarize_events_for_ticker(
             f"- Geen duidelijke verandering in competitieve positie of moat op basis van de recente informatie.\n"
         )
         return {
-            "ticker": ticker,
-            "content": content,
-            "doc_legend": doc_legend,
-            "web_legend": web_legend,
-            "web_debug": web_debug,
-            "used_web": False,
-        }
+            "ticker": ticker, "content": content, "doc_legend": doc_legend, "web_legend": web_legend,
+            "web_debug": web_debug, "used_web": False,
+        }  # fmt: skip
 
-    # ---------- 4) Prompt: langere Samenvatting, kortere moat ----------
-    # ---------- 4) Prompt: langere Samenvatting, kortere moat ----------
+    # ---------- 4) Prompt: langere samenvatting, kortere moat ----------
     prompt = f"""
 Je bent een fundamentele aandelenanalist. Schrijf in het Nederlands.
 
 Je hebt twee soorten bronnen:
 
-1. **PDF-bronnen [S#]** — interne researchdocumenten; deze zijn **leidend**.  
+1. **PDF-bronnen [S#]** — interne researchdocumenten; deze zijn **leidend**.
 2. **Web-bronnen [W#]** — optioneel; alleen gebruiken als ze echt recente, concrete informatie toevoegen.
 
 Voor het aandeel **{ticker}**:
+
+Begin met de kop `### {ticker}`.
 
 **Samenvatting**
 - Schrijf in 2–3 korte alinea’s.
@@ -150,17 +111,23 @@ Voor het aandeel **{ticker}**:
   * koersreacties en hun aanleidingen,
   * relevante uitspraken van management,
   * deals, M&A of regulatoire gebeurtenissen.
-- Gebruik **relatieve cijfers**, niet absolute. Dus zeg: “groei 3% tegenover verwachting 4%” of “marge daalde licht t.o.v. vorig kwartaal”, in plaats van kale bedragen of marges.
+- Gebruik **relatieve cijfers**, niet absolute. Dus zeg: “groei 3% tegenover verwachting 4%” of “marge daalde licht
+  t.o.v. vorig kwartaal”, in plaats van kale bedragen of marges.
 - Noem waar mogelijk richting en context: wat was verwacht, en hoe week het resultaat daarvan af?
-- Geef een logische samenhang tussen nieuws, cijfers en koersreactie. Geef explicite nummers van koersreacties waar mogelijk (daling van x%, stijging van x% etc.)
-- Wees streng en licht cynisch. Documenten en nieuws van bedrijven krijgen vaak een positieve draai; probeer de echte impact te duiden.
+- Geef een logische samenhang tussen nieuws, cijfers en koersreactie. Geef explicite nummers van koersreacties waar
+  mogelijk (daling van x%, stijging van x% etc.)
+- Wees streng en licht cynisch. Documenten en nieuws van bedrijven krijgen vaak een positieve draai; probeer de echte
+  impact te duiden.
+- Verwijs naar bronnen met [S#] en [W#]. Verzin geen cijfers die niet in de bronnen staan.
 
 **Impact op moat & langetermijnpositie**
 - Maximaal drie bullets, kort en to the point.
-- Wees best streng. Als er negatief momentum is zal er meestal echt wel druk op de moat staan. Noem momentum niet expliciet maar redeneer wel in die richting.
+- Wees best streng. Als er negatief momentum is zal er meestal echt wel druk op de moat staan. Noem momentum niet
+  expliciet maar redeneer wel in die richting.
 - Geef per punt aan of de moat wordt **versterkt, verzwakt** of **grotendeels gelijk** blijft.
 - Combineer verwante thema’s (pricing power + merk bijvoorbeeld).
-- Richt je op de structurele impact: verandert dit iets fundamenteels aan competitieve positie, kostenvoordeel of merksterkte?
+- Richt je op de structurele impact: verandert dit iets fundamenteels aan competitieve positie, kostenvoordeel of
+  merksterkte?
 
 Gebruik vooral de PDF-context [S#]; gebruik de web-context [W#] alleen als die iets toevoegt.
 Vermijd overbodige inleidingen of clichés.
@@ -172,170 +139,15 @@ Web-context (optioneel):
 {web_context or "(geen webfragmenten gebruikt of alleen ruis)"}
 """.strip()
 
-    model = model_override or _OPENAI_MODEL_DEFAULT
-    resp = _events_client.chat.completions.create(
-        model=model,
-        messages=[{"role": "user", "content": prompt}],
-        temperature=0.2,
-        max_tokens=900,
-    )
-    content = resp.choices[0].message.content
-
+    content = chat([{"role": "user", "content": prompt}], model=model_override or OPENAI_MODEL, max_tokens=900)
     return {
-        "ticker": ticker,
-        "content": content,
-        "doc_legend": doc_legend,
-        "web_legend": web_legend,
-        "web_debug": web_debug,
-        "used_web": bool(web_snips),
-    }
-
-def agent_investment_case(
-    user_query: str,
-    company_filter: Optional[List[str]],
-    web_allowed: bool,
-    guidance: str = "",                      # NEW
-    model_override: Optional[str] = None,
-) -> Dict[str, Any]:
-    """
-    Bouwt een uitgebreide investment case volgens vast format:
-
-    1. Samenvatting investment case
-    2. Historie / Track record
-    3. Pijlers voor waardecreatie
-       3a. Industrie & positie in value chain
-       3b. Concurrentievoordelen / moats + KPI's
-       3c. Managementkwaliteit & capital allocation
-    4. Risico's (waar kunnen we het mishebben?)
-    5. Conclusie
-
-    Werkt in meerdere LLM-calls (1 per blok) op basis van PDF-repository + optioneel web.
-    """
-    # ----- Canonicalize company names -----
-    load_company_index(list_all_companies())
-    if company_filter:
-        company_filter = canonicalize(company_filter)
-    else:
-        # fallback: canonicalize user_query guesses later
-        pass
+        "ticker": ticker, "content": content, "doc_legend": doc_legend, "web_legend": web_legend,
+        "web_debug": web_debug, "used_web": bool(web_snips),
+    }  # fmt: skip
 
 
-    # ---------- 1) Basis: welke company / query gebruiken ----------
-    effective_companies = company_filter or []
-
-    # If no explicit filter was given, try to canonicalize the detected name
-    if not effective_companies:
-        auto = canonicalize([user_query.strip()])
-        effective_companies = auto
-
-    company_label = effective_companies[0]
-
-
-    base_question = (
-        f"Investment case voor {company_label}: businessmodel, historisch track record, "
-        f"strategische positie, concurrentievoordelen (moats), managementkwaliteit, "
-        f"belangrijkste risico's en waardering."
-    )
-
-    # ---------- 2) PDF / document search ----------
-    local_hits = search_chunks(
-        query=base_question,
-        k=28,
-        company_filter=effective_companies or None,
-    )
-
-    ctx_blocks: list[str] = []
-    legend: list[tuple[str, str, str]] = []
-    for i, h in enumerate(local_hits, start=1):
-        tag = f"S{i}"
-        legend.append((tag, h.get("stored_path", ""), h.get("source", "")))
-        txt = h.get("text", "")
-        ctx_blocks.append(f"[{tag}] {txt}")
-
-    context_text = "\n\n".join(ctx_blocks) if ctx_blocks else "(geen relevante PDF-context gevonden)"
-
-    # ---------- 3) Web snippets ----------
-    if web_allowed:
-        web_snips, web_debug = web_augmented_snippets(base_question, effective_companies)
-    else:
-        web_snips, web_debug = [], ["Web disabled voor investment case"]
-
-    web_legend: list[tuple[str, str, str]] = []
-    wparts: list[str] = []
-    for j, r in enumerate(web_snips, start=1):
-        tag = f"W{j}"
-        web_legend.append((tag, r.get("title", "web"), r.get("url", "")))
-        wparts.append(f"[{tag}] {r.get('snippet','') if 'snippet' in r else r.get('content','')}")
-    web_text = "\n".join(wparts) if wparts else "(geen web-context of web uitgeschakeld)"
-
-    # ---------- 4) Shared prompt header ----------
-    pdf_tags = ", ".join(t for t, _, _ in legend) or "(geen)"
-    web_tags = ", ".join(t for t, _, _ in web_legend) or "(geen)"
-
-    guidance_block = f"\n\nAanvullende analisten-instructies:\n{guidance}\n" if guidance else ""
-
-    shared_header = f"""
-Je bent een fundamentele equity-analist. Schrijf in het **Nederlands**, helder en analytisch.
-
-Gebruik primair de PDF-bronnen [{pdf_tags}] uit de interne researchdatabase; vul alleen aan met web-bronnen [{web_tags}] als ze iets nieuws toevoegen.
-Voor bedrijfsbeschrijving, historie en strategie mag je ook oudere bronnen gebruiken.
-Voor harde cijfers (omzet, EBITDA, nettowinst, leverage, CET1, RoTE, etc.) geef je voorkeur aan informatie uit de meest recente 2–3 jaar in de context.
-Als de actualiteit van een cijfer onduidelijk is, gebruik dan bij benadering/kwalitatieve termen ("in recente jaren", "rond X%") of benoem dat het een indicatieve orde van grootte is.
-Verwijs waar zinvol naar bronnen met **[S#]** (PDF) en **[W#]** (web).
-
-Bedrijf / focus: **{company_label}**
-
-{guidance_block}
-
-PDF-context:
-{context_text}
-
-Web-context (optioneel):
-{web_text}
-""".strip()
-
-
-    model = model_override or _OPENAI_MODEL_DEFAULT
-
-    def _section(
-        instruction: str,
-        previous_sections: str = "",
-        max_tokens: int = 750,
-    ) -> str:
-        """
-        Eén sectie genereren. previous_sections wordt meegegeven zodat de case
-        consistent blijft qua cijfers & conclusies.
-        """
-        prev_block = (
-            ""
-            if not previous_sections
-            else f"\n\nReeds geschreven secties van dezelfde investment case (voor consistentie, niet herschrijven):\n{previous_sections}\n"
-        )
-
-        prompt = f"""{shared_header}
-
-{prev_block}
-
-Schrijf nu **uitsluitend** de volgende sectie van de investment case.
-Gebruik een goed onderbouwde, verhalende stijl met duidelijke redenering.
-Schrijf geen inleiding over het format, alleen de gevraagde sectie.
-
-{instruction}
-""".strip()
-
-        resp = _events_client.chat.completions.create(
-            model=model,
-            messages=[{"role": "user", "content": prompt}],
-            temperature=0.2,
-            max_tokens=max_tokens,
-        )
-        return resp.choices[0].message.content.strip()
-
-    # ---------- 5) De vijf blokken, met aparte calls ----------
-    sections: list[str] = []
-
-    # 1. Samenvatting investment case
-    sec1 = _section(
+_CASE_SECTIONS: list[tuple[str, int]] = [
+    (
         """
 **Sectie 1. Samenvatting investment case**
 
@@ -346,12 +158,9 @@ Schrijf geen inleiding over het format, alleen de gevraagde sectie.
   (bijv. defensief, cyclisch, compounder; aantrekkelijk/neutraal/minder aantrekkelijk).
 - Geen koersdoel, wel kwalitatieve waarderingsinschatting (bijv. "aantrekkelijk geprijsd gezien RoTE en risico-profiel").
 """,
-        previous_sections="",
-        max_tokens=600,
-    )
-    sections.append(sec1)
-
-    sec2 = _section(
+        600,
+    ),
+    (
         """
 **Sectie 2. Historie / Track record**
 
@@ -359,15 +168,12 @@ Schrijf geen inleiding over het format, alleen de gevraagde sectie.
 - Schets een chronologische geschiedenis op hoofdlijnen: ontstaan, grote strategische moves,
   mislukkingen, restructurings, crisis-episodes (indien relevant), en hoe het huidige profiel is ontstaan.
 - Evalueer het track record: welke strategische keuzes waren goed / slecht? Wat zegt dit over de cultuur?
-- Gebruik bij voorkeur concrete cijfers (ROIC, groei, impairments, YoY groei en dergelijken) waar beschikbaar met [S#]/[W#].
+- Gebruik bij voorkeur concrete cijfers (ROIC, groei, impairments, YoY groei en dergelijken) waar beschikbaar met
+  [S#]/[W#].
 """,
-        previous_sections=sec1,
-        max_tokens=900,
-    )
-    sections.append(sec2)
-
-    # 3. Pijlers voor waardecreatie
-    sec3 = _section(
+        900,
+    ),
+    (
         """
 **Sectie 3. Pijlers voor waardecreatie**
 
@@ -376,7 +182,7 @@ Schrijf geen inleiding over het format, alleen de gevraagde sectie.
 
 **3a. Is de industrie aantrekkelijk en heeft het bedrijf een gunstige positie in de value chain?**
 - Beschrijf structuur van de industrie (groei, regulering, cycliciteit, margin-niveau).
-- Plaats het bedrijf binnen de keten: wie zijn klanten, waar zit pricing power, hoe concentrisch is marktaandeel?
+- Plaats het bedrijf binnen de keten: wie zijn klanten, waar zit pricing power, hoe geconcentreerd is marktaandeel?
 - Geef aan of dit een "moat-heavy" of meer commodity-omgeving is.
 
 **3b. Welke concurrentievoordelen (moats) beschermen de winstgevendheid en met welke KPI’s monitoren we die?**
@@ -390,7 +196,7 @@ Schrijf geen inleiding over het format, alleen de gevraagde sectie.
 - Benoem alleen de 2–4 belangrijkste moats die echt gelden.
 - Voor elke moat:
   * Leg kort uit waarom deze bestaat.
-  * Koppel 1–3 concrete KPI’s  die we kunnen volgen.
+  * Koppel 1–3 concrete KPI’s die we kunnen volgen.
 
 **3c. Wordt de onderneming goed gemanaged?**
 - Beoordeel managementkwaliteit: track record, kapitaaltoewijzing, incentives, governance.
@@ -400,13 +206,9 @@ Schrijf geen inleiding over het format, alleen de gevraagde sectie.
 
 Gebruik een verhalende stijl; bullets alleen waar nuttig.
 """,
-        previous_sections=sec1 + "\n\n" + sec2,
-        max_tokens=1300,
-    )
-    sections.append(sec3)
-
-    # 4. Risico's
-    sec4 = _section(
+        1300,
+    ),
+    (
         """
 **Sectie 4. Risico's – waar kunnen we het mishebben?**
 - Begin de sectie met de markdown-kop: `## 4. Risico's – waar kunnen we het mishebben?` op de eerste regel.
@@ -417,13 +219,9 @@ Gebruik een verhalende stijl; bullets alleen waar nuttig.
   * Realisme: basiscase / tail / politiek / regulatoir / disruptie.
 - Vermijd generieke onzin ("macro", "concurrentie") zonder uitwerking; maak het concreet.
 """,
-        previous_sections=sec1 + "\n\n" + sec2 + "\n\n" + sec3,
-        max_tokens=700,
-    )
-    sections.append(sec4)
-
-    # 5. Conclusie
-    sec5 = _section(
+        700,
+    ),
+    (
         """
 **Sectie 5. Conclusie**
 - Begin de sectie met de markdown-kop: `## 5. Conclusie` op de eerste regel.
@@ -431,43 +229,126 @@ Gebruik een verhalende stijl; bullets alleen waar nuttig.
   * Kwaliteit van het bedrijf (moat, management, balans).
   * Verwachte waardecreatie (rendement op kapitaal vs. kosten van kapitaal).
   * Waardering in grote lijnen (goedkoop / fair / duur vs. peers en eigen historie).
-- Benoem expliciet waarom dit aandeel **wel of niet** aantrekkelijk is in de context van een gediversifieerde portefeuille.
+- Benoem expliciet waarom dit aandeel **wel of niet** aantrekkelijk is in de context van een gediversifieerde
+  portefeuille.
 - Sluit af met 3–5 korte zinnen die de kernthesis samenvatten.
 """,
-        previous_sections=sec1 + "\n\n" + sec2 + "\n\n" + sec3 + "\n\n" + sec4,
-        max_tokens=650,
+        650,
+    ),
+]
+
+
+def agent_investment_case(
+    user_query: str,
+    company_filter: list[str] | None,
+    web_allowed: bool,
+    guidance: str = "",
+    model_override: str | None = None,
+    progress: Callable[[str, float], None] | None = None,
+) -> dict[str, Any]:
+    """Uitgebreide investment case in vijf secties (1 LLM-call per sectie, elk met de vorige als context):
+
+    1. Samenvatting  2. Historie / track record  3. Pijlers voor waardecreatie  4. Risico's  5. Conclusie"""
+    if not user_query.strip() and not company_filter:
+        raise ValueError("Geef een bedrijfsnaam of vraag op.")
+
+    def _tick(msg: str, frac: float) -> None:
+        if progress:
+            progress(msg, frac)
+
+    _tick("Bedrijf herkennen…", 0.02)
+    refresh_company_index()
+    companies = canonicalize(company_filter) if company_filter else detect_companies(user_query)
+    company_label = companies[0] if companies else user_query.strip()
+
+    base_question = (
+        f"Investment case voor {company_label}: businessmodel, historisch track record, "
+        f"strategische positie, concurrentievoordelen (moats), managementkwaliteit, "
+        f"belangrijkste risico's en waardering."
     )
-    sections.append(sec5)
 
-    full_text = "\n\n".join(sections)
+    # ---------- PDF search: diversified over documents, gentle recency decay (history matters here) ----------
+    _tick("Research doorzoeken…", 0.08)
+    local_hits = collect_evidence(
+        base_question, k=28, per_doc_cap=6, company_filter=companies or None, recency_tau_days=365
+    )
+    ctx_blocks, legend = format_pdf_context(local_hits)
+    context_text = "\n\n".join(ctx_blocks) if ctx_blocks else "(geen relevante PDF-context gevonden)"
 
-    # ---------- 6) Bronvermelding onderaan ----------
+    # ---------- Web ----------
+    if web_allowed:
+        _tick("Web doorzoeken…", 0.14)
+        web_snips, web_debug = web_augmented_snippets(base_question, companies)
+    else:
+        web_snips, web_debug = [], ["Web disabled voor investment case"]
+    wparts, web_legend = format_web_context(web_snips)
+    web_text = "\n".join(wparts) if wparts else "(geen web-context of web uitgeschakeld)"
+
+    pdf_tags = ", ".join(t for t, _, _ in legend) or "(geen)"
+    web_tags = ", ".join(t for t, _, _ in web_legend) or "(geen)"
+    guidance_block = f"\n\nAanvullende analisten-instructies:\n{guidance}\n" if guidance.strip() else ""
+    no_pdf_note = (
+        "\nLET OP: er zijn geen interne researchdocumenten over dit bedrijf gevonden. Benoem dat expliciet en wees "
+        "terughoudend met harde cijfers.\n"
+        if not local_hits
+        else ""
+    )
+
+    shared_header = f"""
+Je bent een fundamentele equity-analist. Schrijf in het **Nederlands**, helder en analytisch.
+
+Gebruik primair de PDF-bronnen [{pdf_tags}] uit de interne researchdatabase; vul alleen aan met web-bronnen
+[{web_tags}] als ze iets nieuws toevoegen.
+Voor bedrijfsbeschrijving, historie en strategie mag je ook oudere bronnen gebruiken.
+Voor harde cijfers (omzet, EBITDA, nettowinst, leverage, CET1, RoTE, etc.) geef je voorkeur aan informatie uit de
+meest recente 2–3 jaar in de context (de datum staat achter elke bron).
+Als de actualiteit van een cijfer onduidelijk is, gebruik dan bij benadering/kwalitatieve termen ("in recente jaren",
+"rond X%") of benoem dat het een indicatieve orde van grootte is.
+Verwijs waar zinvol naar bronnen met **[S#]** (PDF) en **[W#]** (web).
+{no_pdf_note}
+Bedrijf / focus: **{company_label}**
+{guidance_block}
+PDF-context:
+{context_text}
+
+Web-context (optioneel):
+{web_text}
+""".strip()
+
+    model = model_override or OPENAI_MODEL
+    sections: list[str] = []
+    for n, (instruction, max_tokens) in enumerate(_CASE_SECTIONS, start=1):
+        _tick(f"Sectie {n}/{len(_CASE_SECTIONS)} schrijven…", 0.2 + 0.8 * (n - 1) / len(_CASE_SECTIONS))
+        prev = "\n\n".join(sections)
+        prev_block = (
+            f"\n\nReeds geschreven secties van dezelfde investment case (voor consistentie, niet herschrijven):\n{prev}\n"
+            if prev
+            else ""
+        )
+        prompt = f"""{shared_header}
+{prev_block}
+
+Schrijf nu **uitsluitend** de volgende sectie van de investment case.
+Gebruik een goed onderbouwde, verhalende stijl met duidelijke redenering.
+Schrijf geen inleiding over het format, alleen de gevraagde sectie.
+
+{instruction}
+""".strip()
+        sections.append(chat([{"role": "user", "content": prompt}], model=model, max_tokens=max_tokens))
+    _tick("Klaar", 1.0)
+
     pdf_source_line = (
-        "PDF-bronnen: " + ", ".join(f"[{tag}]" for tag, _, _ in legend)
-        if legend else "PDF-bronnen: (geen gevonden)"
+        "PDF-bronnen: " + ", ".join(f"[{t}] {name}" for t, _, name in legend) if legend else "PDF-bronnen: (geen)"
     )
     web_source_line = (
-        "Web-bronnen: " + ", ".join(f"[{tag}]" for tag, _, _ in web_legend)
-        if web_legend else "Web-bronnen: (geen of uitgeschakeld)"
+        "Web-bronnen: " + ", ".join(f"[{t}] {title}" for t, title, _ in web_legend)
+        if web_legend
+        else "Web-bronnen: (geen of uitgeschakeld)"
     )
+    content = "\n\n".join(sections) + f"\n\n---\n**Bronnen**\n\n{pdf_source_line}\n\n{web_source_line}\n"
 
-    sources_block = f"\n\n---\n**Bronnen**\n\n{pdf_source_line}\n\n{web_source_line}\n"
-
-    content = full_text + sources_block
-
-    out: Dict[str, Any] = {
-        "content": content,
-        "legend": legend,
-        "web_legend": web_legend,
-    }
-    out.update(
-        {
-            "agent_used_web": bool(web_allowed),
-            "agent_web_reason": "investment-case" if web_allowed else "web-disabled",
-            "agent_local_hits": len(local_hits),
-            "agent_top_score": local_hits[0].get("score", 0.0) if local_hits else 0.0,
-            "agent_web_debug": web_debug,
-        }
-    )
-    return out
-
+    return {
+        "content": content, "legend": legend, "web_legend": web_legend, "company": company_label,
+        "companies": companies, "agent_used_web": bool(web_allowed), "agent_local_hits": len(local_hits),
+        "agent_top_score": local_hits[0].get("score", 0.0) if local_hits else 0.0, "agent_web_debug": web_debug,
+    }  # fmt: skip
